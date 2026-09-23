@@ -87,7 +87,7 @@ def process_one(input_file, output_file):
     # 10. 第一行上方插入空行 → 表头变为第 2 行
     ws.insert_rows(1)
 
-    header_row = 2
+    header_row: int = 2
     max_row = ws.max_row
     max_col = ws.max_column
 

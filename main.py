@@ -4,8 +4,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Border, Side, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
 
-input_file = "recourses/小分表_150938ced1feec4b.xlsx"
-output_file = "recourses/小分表_处理后.xlsx"
+input_file = "resources/小分表_150938ced1feec4b.xlsx"
+output_file = "production/小分表_处理后.xlsx"
 
 # 读取
 df = pd.read_excel(input_file, sheet_name="Worksheet", dtype=object)

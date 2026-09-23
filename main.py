@@ -4,6 +4,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Border, Side, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
+from datetime import datetime
 
 # ====== 目录配置 ======
 INPUT_DIR = "resources"
@@ -144,13 +145,15 @@ def main():
     for f in files:
         input_path = os.path.join(INPUT_DIR, f)
         name, ext = os.path.splitext(f)
-        output_path = os.path.join(OUTPUT_DIR, f"{name}_处理后{ext}")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(OUTPUT_DIR, f"{name}_处理后_{ts}{ext}")
 
         try:
             process_one(input_path, output_path)
         except Exception as e:
             print(f"处理 {f} 时出错：{e}")
 
+        os.startfile(os.path.abspath(OUTPUT_DIR))  # 仅 Windows 可用
 
 if __name__ == "__main__":
     main()

@@ -68,7 +68,7 @@ ws.insert_rows(1)
 # 样式参数
 thin = Side(style="thin", color="000000")
 medium = Side(style="medium", color="000000")
-red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 
 header_row = 2
 max_row = ws.max_row

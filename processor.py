@@ -10,8 +10,9 @@ import unicodedata
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Border, Side, PatternFill
+from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.utils import get_column_letter
 
 # ==================== 样式常量 ====================
 
@@ -40,12 +41,12 @@ def unique_headers(cols):
     - 其它列（姓名、总、客、主、校、班等）原样保留
     """
     result = []
-    last_q_num = None  # 只记小题号，如 "1"、"16"
+    last_q_num = None
 
     for c in cols:
         c = str(c).strip()
 
-        # 1) 已合并列 "一.1_D" / "二.16_AC" → "1.D" / "16.AC"
+        # 1) 已合并列 "一.1_D" → "1.D"
         m = re.fullmatch(r"[一二三四五六七八九十]+\.(\d+)_([A-Z]+)", c)
         if m:
             q_num, ans = m.group(1), m.group(2)
@@ -53,36 +54,23 @@ def unique_headers(cols):
             result.append(f"{q_num}.{ans}")
             continue
 
-        # 2) 纯题号列 "一.1" / "二.16" → 原样保留，只记录小题号
+        # 2) 纯题号列 "一.1" → 原样保留，记录小题号
         m = re.fullmatch(r"[一二三四五六七八九十]+\.(\d+)", c)
         if m:
             last_q_num = m.group(1)
             result.append(c)
             continue
 
-        # 3) 答案列 "C" / "C.1" / "D.1" / "AD.1" → "小题号.C"
+        # 3) 答案列 "C" / "C.1" / "AD.1" → "小题号.答案"
         m = re.fullmatch(r"([A-Z]+)(?:\.\d+)?", c)
         if m and last_q_num:
             result.append(f"{last_q_num}.{m.group(1)}")
             continue
 
-        # 4) 其它列（姓名、总、客、主、校、班……）原样保留
+        # 4) 其它列保持原样
         result.append(c)
 
     return result
-
-
-def to_num(x):
-    """文本形式数字转数字"""
-    if isinstance(x, str):
-        s = x.strip()
-        if s == "":
-            return x
-        if re.fullmatch(r"-?\d+", s):
-            return int(s)
-        if re.fullmatch(r"-?\d+\.\d+", s):
-            return float(s)
-    return x
 
 
 def strip_prefix_from_answer_headers(ws, header_row=2):
@@ -99,41 +87,89 @@ def strip_prefix_from_answer_headers(ws, header_row=2):
                 cell.value = m.group(1)
 
 
+def to_num(x):
+    """文本形式数字转数字"""
+    if isinstance(x, str):
+        s = x.strip()
+        if s == "":
+            return x
+        if re.fullmatch(r"-?\d+", s):
+            return int(s)
+        if re.fullmatch(r"-?\d+\.\d+", s):
+            return float(s)
+    return x
+
+
+def summarize_zero_scores(df):
+    """
+    汇总：
+    - 除 "二.16" 外的题：筛选得分 == 0 的学生
+    - "二.16"：筛选得分 < 0 的学生
+    - 排除总分为 0 的学生
+    """
+    if "姓名" not in df.columns:
+        return pd.DataFrame()
+
+    if "总" in df.columns:
+        df = df[df["总"] != 0]
+
+    q_cols = [c for c in df.columns
+              if re.fullmatch(r"[一二三四五六七八九十]+\.\d+", str(c))]
+
+    rows = []
+    for q in q_cols:
+        if q == "二.16":
+            mask = df[q] < 0
+            rule = "< 0"
+        else:
+            mask = df[q] == 0
+            rule = "= 0"
+
+        students = df.loc[mask, "姓名"].dropna().astype(str)
+        students = [s.strip() for s in students if s.strip()]
+
+        rows.append({
+            "题号": q,
+            "筛选规则": rule,
+            "人数": len(students),
+            "学生名单": "、".join(students) if students else "（无）"
+        })
+
+    return pd.DataFrame(rows)
+
+
 def auto_fit_columns(ws, min_width=4, max_width=60, padding=2):
     """
-    根据内容自动调整每一列的列宽，使其恰好容纳最长内容。
-    - 中文/全角字符按 2 个单位宽计算
-    - 英文/数字/半角符号按 1 个单位宽计算
-    - min_width：最小列宽
-    - max_width：最大列宽（避免某些超长内容把列撑爆）
-    - padding：右侧留白
+    根据内容自动调整每列列宽，使其恰好容纳最长内容。
+    - 中文/全角字符按 2 计算；英文/数字/半角按 1 计算
+    - 用列索引 + get_column_letter 取列名，兼容 MergedCell
     """
     def display_width(s):
         w = 0
         for ch in str(s):
-            # 常用判断：CJK 统一表意文字、全角标点等按 2 计
             if unicodedata.east_asian_width(ch) in ("W", "F"):
                 w += 2
             else:
                 w += 1
         return w
 
-    for col_cells in ws.iter_cols():
-        col_letter = col_cells[0].column_letter
+    for col_idx in range(1, ws.max_column + 1):
+        col_letter = get_column_letter(col_idx)
         max_w = 0
-        for cell in col_cells:
+        for row_idx in range(1, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
             if cell.value is None:
                 continue
             for line in str(cell.value).split("\n"):
                 max_w = max(max_w, display_width(line))
-        # 空列给一个默认宽
+
         width = max(min_width, min(max_w + padding, max_width))
         ws.column_dimensions[col_letter].width = width
 
 
 # ==================== 单文件处理 ====================
 
-def process_one(input_file, output_file, log=print):
+def process_one(input_file, output_file, log=print, exam_name="", class_num=""):
     """处理单个 Excel 文件，输出到 output_file"""
     log(f"正在处理：{os.path.basename(input_file)}")
 
@@ -169,7 +205,7 @@ def process_one(input_file, output_file, log=print):
     if "总" in df.columns:
         df = df[df["总"] != 0].reset_index(drop=True)
 
-    # 写入 Excel
+    # ===== 写入 Excel =====
     wb = Workbook()
     ws = wb.active
     ws.title = "Worksheet"
@@ -181,13 +217,15 @@ def process_one(input_file, output_file, log=print):
     ws.insert_rows(1)
 
     # 表头行此时是第 2 行：把答案列的 "1.D" / "16.AC" 改成 "D" / "AC"
-    strip_prefix_from_answer_headers(ws, header_row=2)
-
     header_row = 2
+    strip_prefix_from_answer_headers(ws, header_row=header_row)
+
     max_row = ws.max_row
     max_col = ws.max_column
 
-    # 8. 标红
+    # 注意：标题先不写，等列宽调完再写，避免撑宽 A 列
+
+    # ===== 标红 =====
     for row in ws.iter_rows(min_row=header_row + 1, max_row=max_row,
                             min_col=1, max_col=max_col):
         for cell in row:
@@ -200,12 +238,13 @@ def process_one(input_file, output_file, log=print):
                 if isinstance(val, (int, float)) and val < 0:
                     cell.fill = LIGHT_RED
 
-    # 9. 框线
+    # ===== 框线（只覆盖表头到数据区，不含标题行） =====
     for row in ws.iter_rows(min_row=header_row, max_row=max_row,
                             min_col=1, max_col=max_col):
         for cell in row:
             cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
+    # 外侧加粗
     for col in range(1, max_col + 1):
         c = ws.cell(row=header_row, column=col)
         c.border = Border(left=c.border.left, right=c.border.right,
@@ -222,12 +261,45 @@ def process_one(input_file, output_file, log=print):
         c.border = Border(left=c.border.left, right=MEDIUM,
                           top=c.border.top, bottom=c.border.bottom)
 
-    # 主表列宽自适应
+    # ===== 列宽自适应（此时 A1 还空着，不受标题影响） =====
     auto_fit_columns(ws)
 
-    # 如果有"零分负分汇总"表，也顺便自适应
-    if "零分负分汇总" in wb.sheetnames:
-        auto_fit_columns(wb["零分负分汇总"])
+    # ===== 标题：写在 A1，用“跨列居中”，不合并、不改列宽 =====
+    if exam_name or class_num:
+        title = f"高三年级{class_num}班{exam_name}考试物理成绩单"
+        cell = ws.cell(row=1, column=1)
+        cell.value = title
+        cell.alignment = Alignment(horizontal="centerContinuous",
+                                   vertical="center")
+        cell.font = Font(size=14, bold=True)
+
+    # ===== 零分 / 负分汇总工作表 =====
+    summary_df = summarize_zero_scores(df)
+    if not summary_df.empty:
+        ws2 = wb.create_sheet("零分负分汇总")
+
+        for r in dataframe_to_rows(summary_df, index=False, header=True):
+            ws2.append(r)
+
+        # 表头加粗
+        for cell in ws2[1]:
+            cell.font = Font(bold=True)
+
+        # 给"二.16"那行加浅红背景
+        for row in ws2.iter_rows(min_row=2, max_row=ws2.max_row,
+                                 min_col=1, max_col=4):
+            if row[0].value == "二.16":
+                for cell in row:
+                    cell.fill = LIGHT_RED
+
+        # 表格框线
+        for row in ws2.iter_rows(min_row=1, max_row=ws2.max_row,
+                                 min_col=1, max_col=4):
+            for cell in row:
+                cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+        # 汇总表列宽自适应（放宽一点，方便看名单）
+        auto_fit_columns(ws2, max_width=200)
 
     wb.save(output_file)
     log(f"  ✅ 已生成：{os.path.basename(output_file)}")
@@ -235,7 +307,8 @@ def process_one(input_file, output_file, log=print):
 
 # ==================== 批量处理 ====================
 
-def batch_process(input_dir, output_dir, log=print, exts=(".xlsx", ".xls")):
+def batch_process(input_dir, output_dir, log=print, exts=(".xlsx", ".xls"),
+                  exam_name="", class_num=""):
     """
     批量处理 input_dir 下的所有 Excel 文件，输出到 output_dir。
     返回 (成功数, 失败数)。
@@ -255,7 +328,8 @@ def batch_process(input_dir, output_dir, log=print, exts=(".xlsx", ".xls")):
         name, ext = os.path.splitext(f)
         output_path = os.path.join(output_dir, f"{name}_处理后{ext}")
         try:
-            process_one(input_path, output_path, log)
+            process_one(input_path, output_path, log,
+                        exam_name=exam_name, class_num=class_num)
             ok += 1
         except Exception as e:
             fail += 1

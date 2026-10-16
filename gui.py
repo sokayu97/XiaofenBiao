@@ -16,19 +16,23 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("小分表批量处理工具")
-        self.geometry("760x540")
-        self.minsize(680, 460)
+        self.geometry("780x600")
+        self.minsize(700, 520)
 
         self.input_var = tk.StringVar(value=os.path.abspath("resources"))
         self.output_var = tk.StringVar(value=os.path.abspath("production"))
         self.auto_open_var = tk.BooleanVar(value=True)
+
+        # 新增：考试信息
+        self.exam_var = tk.StringVar()
+        self.class_var = tk.StringVar()
 
         self._build_ui()
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
 
-        # 顶部：文件夹选择
+        # ---- 文件夹设置 ----
         top = ttk.LabelFrame(self, text="文件夹设置")
         top.pack(fill="x", **pad)
 
@@ -42,7 +46,19 @@ class App(tk.Tk):
 
         top.columnconfigure(1, weight=1)
 
-        # 中部：选项与按钮
+        # ---- 考试信息 ----
+        info = ttk.LabelFrame(self, text="考试信息（可留空）")
+        info.pack(fill="x", **pad)
+
+        ttk.Label(info, text="考试名称：").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(info, textvariable=self.exam_var).grid(row=0, column=1, sticky="ew", padx=4)
+
+        ttk.Label(info, text="班级（纯数字）：").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(info, textvariable=self.class_var).grid(row=1, column=1, sticky="ew", padx=4)
+
+        info.columnconfigure(1, weight=1)
+
+        # ---- 选项与按钮 ----
         mid = ttk.Frame(self)
         mid.pack(fill="x", **pad)
 
@@ -52,11 +68,11 @@ class App(tk.Tk):
         self.start_btn = ttk.Button(mid, text="开始处理", command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
 
-        # 日志区
+        # ---- 日志区 ----
         log_frame = ttk.LabelFrame(self, text="运行日志")
         log_frame.pack(fill="both", expand=True, **pad)
 
-        self.log_text = tk.Text(log_frame, wrap="word", height=18,
+        self.log_text = tk.Text(log_frame, wrap="word", height=16,
                                 state="disabled", font=("Consolas", 10))
         self.log_text.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
 
@@ -64,7 +80,7 @@ class App(tk.Tk):
         sb.pack(side="right", fill="y", pady=6)
         self.log_text.config(yscrollcommand=sb.set)
 
-        # 状态栏
+        # ---- 状态栏 ----
         self.status_var = tk.StringVar(value="就绪")
         status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief="sunken")
         status.pack(fill="x", side="bottom")
@@ -83,7 +99,6 @@ class App(tk.Tk):
             self.output_var.set(d)
 
     def log(self, msg):
-        """线程安全地写日志"""
         self.after(0, self._append_log, msg)
 
     def _append_log(self, msg):
@@ -103,6 +118,11 @@ class App(tk.Tk):
             messagebox.showerror("错误", "请填写输出文件夹")
             return
 
+        cls = self.class_var.get().strip()
+        if cls and not cls.isdigit():
+            messagebox.showerror("错误", "班级必须是纯数字")
+            return
+
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
@@ -117,7 +137,18 @@ class App(tk.Tk):
         try:
             self.log(f"输入：{in_dir}")
             self.log(f"输出：{out_dir}")
-            ok, fail = processor.batch_process(in_dir, out_dir, log=self.log)
+
+            exam_name = self.exam_var.get().strip()
+            class_num = self.class_var.get().strip()
+            if exam_name or class_num:
+                self.log(f"考试名称：{exam_name or '（空）'}，班级：{class_num or '（空）'}")
+
+            ok, fail = processor.batch_process(
+                in_dir, out_dir,
+                log=self.log,
+                exam_name=exam_name,
+                class_num=class_num,
+            )
 
             if self.auto_open_var.get() and os.path.isdir(out_dir):
                 try:

@@ -6,6 +6,7 @@ processor.py
 import os
 import re
 import traceback
+import unicodedata
 
 import pandas as pd
 from openpyxl import Workbook
@@ -98,6 +99,38 @@ def strip_prefix_from_answer_headers(ws, header_row=2):
                 cell.value = m.group(1)
 
 
+def auto_fit_columns(ws, min_width=4, max_width=60, padding=2):
+    """
+    根据内容自动调整每一列的列宽，使其恰好容纳最长内容。
+    - 中文/全角字符按 2 个单位宽计算
+    - 英文/数字/半角符号按 1 个单位宽计算
+    - min_width：最小列宽
+    - max_width：最大列宽（避免某些超长内容把列撑爆）
+    - padding：右侧留白
+    """
+    def display_width(s):
+        w = 0
+        for ch in str(s):
+            # 常用判断：CJK 统一表意文字、全角标点等按 2 计
+            if unicodedata.east_asian_width(ch) in ("W", "F"):
+                w += 2
+            else:
+                w += 1
+        return w
+
+    for col_cells in ws.iter_cols():
+        col_letter = col_cells[0].column_letter
+        max_w = 0
+        for cell in col_cells:
+            if cell.value is None:
+                continue
+            for line in str(cell.value).split("\n"):
+                max_w = max(max_w, display_width(line))
+        # 空列给一个默认宽
+        width = max(min_width, min(max_w + padding, max_width))
+        ws.column_dimensions[col_letter].width = width
+
+
 # ==================== 单文件处理 ====================
 
 def process_one(input_file, output_file, log=print):
@@ -188,6 +221,13 @@ def process_one(input_file, output_file, log=print):
         c = ws.cell(row=row, column=max_col)
         c.border = Border(left=c.border.left, right=MEDIUM,
                           top=c.border.top, bottom=c.border.bottom)
+
+    # 主表列宽自适应
+    auto_fit_columns(ws)
+
+    # 如果有"零分负分汇总"表，也顺便自适应
+    if "零分负分汇总" in wb.sheetnames:
+        auto_fit_columns(wb["零分负分汇总"])
 
     wb.save(output_file)
     log(f"  ✅ 已生成：{os.path.basename(output_file)}")

@@ -130,7 +130,7 @@ def process_one(input_file, output_file):
     wb.save(output_file)
     print(f"已生成：{output_file}")
 
-
+# 主方法
 def main():
     # 支持的 Excel 后缀
     exts = (".xlsx", ".xls")

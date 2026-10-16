@@ -32,22 +32,42 @@ def clean_header(h):
 
 def unique_headers(cols):
     """
-    让表头唯一：
-    - 形如 一.1 / 二.16 的列保持原样，并记住它作为"当前题号"
-    - 形如单字母 A/B/C/D 的答案列，改成 "题号_选项"，如 一.1_D
+    统一表头格式：
+    - 纯题号列   "一.1" / "二.16"       → 原样保留
+    - 已合并列   "一.1_D" / "二.16_AC"  → "1.D" / "16.AC"
+    - 答案列     "C"、"C.1"、"AD.1"     → 挂到上一个题号的小题号，如 "4.C"、"10.AD"
     - 其它列（姓名、总、客、主、校、班等）原样保留
     """
     result = []
-    last_q = None
+    last_q_num = None  # 只记小题号，如 "1"、"16"
+
     for c in cols:
         c = str(c).strip()
-        if re.fullmatch(r"[一二三四五六七八九十]+\.\d+", c):
-            last_q = c
+
+        # 1) 已合并列 "一.1_D" / "二.16_AC" → "1.D" / "16.AC"
+        m = re.fullmatch(r"[一二三四五六七八九十]+\.(\d+)_([A-Z]+)", c)
+        if m:
+            q_num, ans = m.group(1), m.group(2)
+            last_q_num = q_num
+            result.append(f"{q_num}.{ans}")
+            continue
+
+        # 2) 纯题号列 "一.1" / "二.16" → 原样保留，只记录小题号
+        m = re.fullmatch(r"[一二三四五六七八九十]+\.(\d+)", c)
+        if m:
+            last_q_num = m.group(1)
             result.append(c)
-        elif re.fullmatch(r"[A-Z]+", c) and last_q:
-            result.append(f"{last_q}_{c}")
-        else:
-            result.append(c)
+            continue
+
+        # 3) 答案列 "C" / "C.1" / "D.1" / "AD.1" → "小题号.C"
+        m = re.fullmatch(r"([A-Z]+)(?:\.\d+)?", c)
+        if m and last_q_num:
+            result.append(f"{last_q_num}.{m.group(1)}")
+            continue
+
+        # 4) 其它列（姓名、总、客、主、校、班……）原样保留
+        result.append(c)
+
     return result
 
 
@@ -62,6 +82,20 @@ def to_num(x):
         if re.fullmatch(r"-?\d+\.\d+", s):
             return float(s)
     return x
+
+
+def strip_prefix_from_answer_headers(ws, header_row=2):
+    """
+    把形如 "1.D"、"16.AC" 的答案列表头去掉题号前缀，只留字母。
+    纯题号列（中文开头，如 "一.1"）原样保留。
+    """
+    for col in range(1, ws.max_column + 1):
+        cell = ws.cell(row=header_row, column=col)
+        val = cell.value
+        if isinstance(val, str):
+            m = re.fullmatch(r"\d+\.([A-Z]+)", val)
+            if m:
+                cell.value = m.group(1)
 
 
 # ==================== 单文件处理 ====================
@@ -112,6 +146,9 @@ def process_one(input_file, output_file, log=print):
 
     # 10. 第一行上方插入空行 → 表头变为第 2 行
     ws.insert_rows(1)
+
+    # 表头行此时是第 2 行：把答案列的 "1.D" / "16.AC" 改成 "D" / "AC"
+    strip_prefix_from_answer_headers(ws, header_row=2)
 
     header_row = 2
     max_row = ws.max_row

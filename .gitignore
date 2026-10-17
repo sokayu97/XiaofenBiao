@@ -2,3 +2,6 @@
 /resources/
 /.idea/
 /.venv/
+/build/
+/dist/
+/*.spec

@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import processor
+import subprocess
 
 
 # ==================== 公共基类：考试信息 + 日志 + 状态栏 ====================
@@ -185,7 +186,6 @@ class BatchTab(BaseTab):
                 except Exception:
                     pass
 
-            self.log(f"\n完成：成功 {ok} 个，失败 {fail} 个。")
             self.after(0, lambda: self.set_status(
                 f"完成：成功 {ok}，失败 {fail}"))
         except Exception as e:
@@ -202,6 +202,7 @@ class SingleTab(BaseTab):
     def __init__(self, parent):
         super().__init__(parent)
         self.input_var = tk.StringVar()
+        self.auto_open_var = tk.BooleanVar(value=True)   # 新增
         self.start_btn = None
         self._build_ui()
 
@@ -223,9 +224,11 @@ class SingleTab(BaseTab):
         info = self._build_exam_info(self)
         info.pack(fill="x", **pad)
 
-        # 按钮
+        # 选项与按钮
         mid = ttk.Frame(self)
         mid.pack(fill="x", **pad)
+        ttk.Checkbutton(mid, text="处理完成后自动打开保存位置",
+                        variable=self.auto_open_var).pack(side="left", padx=6)
         self.start_btn = ttk.Button(mid, text="开始处理并保存...",
                                     command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
@@ -286,6 +289,20 @@ class SingleTab(BaseTab):
         )
         t.start()
 
+    def _open_in_explorer(self, file_path):
+        """
+        用资源管理器打开文件所在目录并选中该文件。
+        失败时退化为只打开所在文件夹。
+        """
+        try:
+            norm = os.path.normpath(file_path)
+            subprocess.Popen(["explorer", f"/select,{norm}"])
+        except Exception:
+            try:
+                os.startfile(os.path.dirname(file_path))
+            except Exception as e:
+                self.log(f"  ⚠️ 无法打开保存位置：{e}")
+
     def _run(self, input_file, output_file, exam_name, cls):
         try:
             self.log(f"输入：{input_file}")
@@ -302,14 +319,21 @@ class SingleTab(BaseTab):
             )
             self.log("\n✅ 处理完成。")
             self.after(0, lambda: self.set_status("完成"))
+
+            # 处理完成后自动打开保存位置
+            if self.auto_open_var.get():
+                self._open_in_explorer(output_file)
+
             self.after(0, lambda: messagebox.showinfo(
                 "完成", f"文件已保存到：\n{output_file}"))
+
         except Exception as e:
             self.log(f"发生异常：{e}")
             self.log(traceback.format_exc())
             self.after(0, lambda: self.set_status("出错"))
             self.after(0, lambda: messagebox.showerror(
                 "处理失败", str(e)))
+
         finally:
             self.after(0, lambda: self.start_btn.config(state="normal"))
 

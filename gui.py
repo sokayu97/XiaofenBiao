@@ -333,11 +333,17 @@ class App(tk.Tk):
         notebook.add(self.single_tab, text="   单文件处理   ")
         notebook.add(self.batch_tab, text="   批量处理   ")
 
-        # ---- 状态栏（主窗口底部） ----
+        # ---- 状态栏（主窗口底部，扁平） ----
+        status_bar = ttk.Frame(self)
+        status_bar.pack(fill="x", side="bottom", padx=10, pady=(6, 6))
+
+        ttk.Separator(status_bar, orient="horizontal").pack(fill="x")
+
         self.status_var = tk.StringVar(value="就绪")
-        status = ttk.Label(self, textvariable=self.status_var,
-                           anchor="w", relief="sunken")
-        status.pack(fill="x", side="bottom", padx=10, pady=(0, 6))
+        status = ttk.Label(status_bar, textvariable=self.status_var,
+                           anchor="w", relief="flat", borderwidth=0,
+                           padding=(4, 4))
+        status.pack(fill="x")
 
 
 def main():

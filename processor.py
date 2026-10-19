@@ -6,13 +6,13 @@ processor.py
 import os
 import re
 import traceback
-import unicodedata
 
 import pandas as pd
-from openpyxl import Workbook
+import unicodedata
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
-from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # ==================== 样式常量 ====================
 
@@ -338,6 +338,236 @@ def batch_process(input_dir, output_dir, log=print, exts=(".xlsx", ".xls"),
 
     log(f"\n完成：成功 {ok} 个，失败 {fail} 个。")
     return ok, fail
+
+
+def process_class_compare(input_file, output_file, log=print):
+    """
+    处理班级对比表：
+    - 原工作表：文本型数字转数字（A 列“班级”除外）；
+      百分比字符串转数字并保留百分比格式
+    - 新增工作表“处理后”：班级 + 各题平均分 + 客观分 + 主观分 + 总分
+      （班级列保留文本）
+    - “客观分”“主观分”两列宽度一致（取较窄者）
+    """
+    log(f"正在处理班级对比表：{os.path.basename(input_file)}")
+    wb = load_workbook(input_file)
+    ws_src = wb.active
+    rows = list(ws_src.iter_rows(values_only=True))
+
+    # ---------- 找到所有表头行 ----------
+    header_indices = []
+    for i, row in enumerate(rows):
+        if row and len(row) >= 1 and str(row[0]).strip() == "班级":
+            if any(cell is not None and "平均分" in str(cell) for cell in row):
+                header_indices.append(i)
+    if not header_indices:
+        raise ValueError("未找到表头行（第一列为“班级”且包含“平均分”的列）")
+
+    # ---------- 解析每个块 ----------
+    parsed_blocks = []
+    for hi in header_indices:
+        header = rows[hi]
+        data = []
+        j = hi + 1
+        while j < len(rows):
+            r = rows[j]
+            if r is None or all(cell is None or str(cell).strip() == "" for cell in r):
+                break
+            if j in header_indices:
+                break
+            if str(r[0]).strip() == "主观题":
+                j += 1
+                continue
+            data.append(r)
+            j += 1
+
+        keep_cols = []
+        for idx, cell in enumerate(header):
+            if cell is None:
+                continue
+            s = str(cell).strip()
+            if s == "班级":
+                keep_cols.append((idx, "班级"))
+            elif "平均分" in s:
+                m = re.search(r'([一二三四五六七八九十]+\.\d+)', s)
+                if m:
+                    keep_cols.append((idx, m.group(1)))
+        if not keep_cols:
+            continue
+
+        questions = [name for _, name in keep_cols if name != "班级"]
+        if not questions:
+            continue
+
+        first_q = questions[0]
+        if first_q.startswith("一"):
+            block_type = "客观"
+        elif first_q.startswith("二"):
+            block_type = "主观"
+        else:
+            block_type = "客观"
+
+        data_dict = {}
+        for row in data:
+            if row is None:
+                continue
+            d = {}
+            cls_val = None
+            for idx, name in keep_cols:
+                val = row[idx] if idx < len(row) else None
+                if name == "班级":
+                    cls_val = val
+                    d["班级"] = val
+                else:
+                    d[name] = to_num(val) if val is not None else None
+            if cls_val is None:
+                continue
+            key = str(cls_val).strip()
+            if not key:
+                continue
+            data_dict[key] = d
+
+        parsed_blocks.append({
+            'type': block_type,
+            'questions': questions,
+            'data': data_dict,
+        })
+
+    # ---------- 合并数据 ----------
+    class_order = []
+    for block in parsed_blocks:
+        for cls in block['data'].keys():
+            if cls not in class_order:
+                class_order.append(cls)
+
+    class_data = {}
+    for cls in class_order:
+        class_data[cls] = {'客观': {}, '主观': {}, '客观分': 0, '主观分': 0}
+
+    for block in parsed_blocks:
+        btype = block['type']
+        for cls, d in block['data'].items():
+            if cls not in class_data:
+                class_data[cls] = {'客观': {}, '主观': {}, '客观分': 0, '主观分': 0}
+            for q in block['questions']:
+                val = d.get(q)
+                class_data[cls][btype][q] = val if isinstance(val, (int, float)) else 0
+            total = sum(v for v in class_data[cls][btype].values()
+                        if isinstance(v, (int, float)))
+            class_data[cls][f"{btype}分"] = total
+
+    obj_questions = []
+    subj_questions = []
+    for block in parsed_blocks:
+        if block['type'] == '客观':
+            for q in block['questions']:
+                if q not in obj_questions:
+                    obj_questions.append(q)
+        else:
+            for q in block['questions']:
+                if q not in subj_questions:
+                    subj_questions.append(q)
+
+    # ---------- 写“处理后”工作表（含总分，班级保留文本） ----------
+    if "处理后" in wb.sheetnames:
+        del wb["处理后"]
+    ws_out = wb.create_sheet("处理后")
+
+    headers = (["班级"] + obj_questions + subj_questions
+               + ["客观分", "主观分", "总分"])
+    ws_out.append(headers)
+
+    for cls in class_order:
+        cd = class_data[cls]
+        row = [cls]
+        for q in obj_questions:
+            row.append(cd['客观'].get(q, ""))
+        for q in subj_questions:
+            row.append(cd['主观'].get(q, ""))
+        obj = cd['客观分']
+        subj = cd['主观分']
+        row.append(obj)
+        row.append(subj)
+        row.append(obj + subj)
+        ws_out.append(row)
+
+    # ---------- 样式 ----------
+    for cell in ws_out[1]:
+        cell.font = Font(bold=True)
+
+    max_row = ws_out.max_row
+    max_col = ws_out.max_column
+    for row in ws_out.iter_rows(min_row=1, max_row=max_row,
+                                min_col=1, max_col=max_col):
+        for cell in row:
+            cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+    for col in range(1, max_col + 1):
+        c = ws_out.cell(row=1, column=col)
+        c.border = Border(left=c.border.left, right=c.border.right,
+                          top=MEDIUM, bottom=c.border.bottom)
+        c = ws_out.cell(row=max_row, column=col)
+        c.border = Border(left=c.border.left, right=c.border.right,
+                          top=c.border.top, bottom=MEDIUM)
+
+    for r in range(1, max_row + 1):
+        c = ws_out.cell(row=r, column=1)
+        c.border = Border(left=MEDIUM, right=c.border.right,
+                          top=c.border.top, bottom=c.border.bottom)
+        c = ws_out.cell(row=r, column=max_col)
+        c.border = Border(left=c.border.left, right=MEDIUM,
+                          top=c.border.top, bottom=c.border.bottom)
+
+    auto_fit_columns(ws_out)
+
+    # ---------- 让“客观分”和“主观分”列宽一致（取较窄者） ----------
+    from openpyxl.utils import get_column_letter
+    try:
+        obj_idx = headers.index("客观分") + 1
+        subj_idx = headers.index("主观分") + 1
+        obj_w = ws_out.column_dimensions[get_column_letter(obj_idx)].width or 0
+        subj_w = ws_out.column_dimensions[get_column_letter(subj_idx)].width or 0
+        target = min(obj_w, subj_w)   # 取较窄者，避免把客观分撑宽
+        ws_out.column_dimensions[get_column_letter(obj_idx)].width = target
+        ws_out.column_dimensions[get_column_letter(subj_idx)].width = target
+    except ValueError:
+        pass
+
+    # ---------- 原工作表：文本数字 / 百分比转数字 ----------
+    for row in ws_src.iter_rows():
+        for cell in row:
+            if cell.column == 1:      # 跳过“班级”列
+                continue
+            val = cell.value
+            if not isinstance(val, str):
+                continue
+            s = val.strip()
+            if s == "":
+                continue
+
+            # 百分比字符串 → 数字 + 百分比格式
+            if s.endswith("%"):
+                core = s.rstrip("%")
+                try:
+                    num = float(core)
+                except ValueError:
+                    continue
+                if "." in core:
+                    dec = len(core.split(".")[1])
+                    fmt = "0." + ("0" * dec) + "%"
+                else:
+                    fmt = "0%"
+                cell.value = num / 100.0
+                cell.number_format = fmt
+                continue
+
+            # 普通文本型数字
+            new_val = to_num(s)
+            if isinstance(new_val, (int, float)):
+                cell.value = new_val
+
+    wb.save(output_file)
+    log(f"  ✅ 已生成：{os.path.basename(output_file)}")
 
 
 # ==================== 命令行入口（可选） ====================

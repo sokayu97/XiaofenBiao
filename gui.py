@@ -338,6 +338,120 @@ class SingleTab(BaseTab):
             self.after(0, lambda: self.start_btn.config(state="normal"))
 
 
+# ==================== 选项卡 3：班级对比处理 ====================
+
+class ClassCompareTab(BaseTab):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.input_var = tk.StringVar()
+        self.auto_open_var = tk.BooleanVar(value=True)
+        self.start_btn = None
+        self._build_ui()
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 6}
+
+        # 文件选择
+        top = ttk.LabelFrame(self, text="文件选择")
+        top.pack(fill="x", **pad)
+        ttk.Label(top, text="输入文件：").grid(row=0, column=0,
+                                              sticky="w", padx=8, pady=6)
+        ttk.Entry(top, textvariable=self.input_var).grid(row=0, column=1,
+                                                         sticky="ew", padx=4)
+        ttk.Button(top, text="选择文件...",
+                   command=self.choose_file).grid(row=0, column=2, padx=6)
+        top.columnconfigure(1, weight=1)
+
+        # 选项与按钮
+        mid = ttk.Frame(self)
+        mid.pack(fill="x", **pad)
+        ttk.Checkbutton(mid, text="处理完成后自动打开保存位置",
+                        variable=self.auto_open_var).pack(side="left", padx=6)
+        self.start_btn = ttk.Button(mid, text="开始处理并保存...",
+                                    command=self.on_start)
+        self.start_btn.pack(side="right", padx=6)
+
+        # 日志
+        log_frame = self._build_log(self)
+        log_frame.pack(fill="both", expand=True, **pad)
+
+    def choose_file(self):
+        init = self.input_var.get()
+        init_dir = os.path.dirname(init) if init else os.getcwd()
+        f = filedialog.askopenfilename(
+            title="选择班级对比表",
+            initialdir=init_dir,
+            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+        )
+        if f:
+            self.input_var.set(f)
+
+    def _open_in_explorer(self, file_path):
+        try:
+            norm = os.path.normpath(file_path)
+            subprocess.Popen(["explorer", f"/select,{norm}"])
+        except Exception:
+            try:
+                os.startfile(os.path.dirname(file_path))
+            except Exception as e:
+                self.log(f"  ⚠️ 无法打开保存位置：{e}")
+
+    def on_start(self):
+        input_file = self.input_var.get().strip()
+        if not input_file or not os.path.isfile(input_file):
+            messagebox.showerror("错误", f"输入文件不存在：\n{input_file}")
+            return
+
+        in_dir = os.path.dirname(input_file) or os.getcwd()
+        name, _ = os.path.splitext(os.path.basename(input_file))
+        default_name = f"{name}_处理后.xlsx"
+
+        output_file = filedialog.asksaveasfilename(
+            title="选择保存位置",
+            initialdir=in_dir,
+            initialfile=default_name,
+            defaultextension=".xlsx",
+            filetypes=[("Excel 文件", "*.xlsx")],
+        )
+        if not output_file:
+            return
+
+        if not output_file.lower().endswith(".xlsx"):
+            output_file = os.path.splitext(output_file)[0] + ".xlsx"
+
+        self.clear_log()
+        self.start_btn.config(state="disabled")
+        self.set_status("处理中...")
+
+        t = threading.Thread(target=self._run,
+                             args=(input_file, output_file), daemon=True)
+        t.start()
+
+    def _run(self, input_file, output_file):
+        try:
+            self.log(f"输入：{input_file}")
+            self.log(f"输出：{output_file}")
+
+            processor.process_class_compare(input_file, output_file, log=self.log)
+
+            self.log("\n✅ 处理完成。")
+            self.after(0, lambda: self.set_status("完成"))
+
+            if self.auto_open_var.get():
+                self._open_in_explorer(output_file)
+
+            self.after(0, lambda: messagebox.showinfo(
+                "完成", f"文件已保存到：\n{output_file}"))
+        except Exception as e:
+            self.log(f"发生异常：{e}")
+            self.log(traceback.format_exc())
+            self.after(0, lambda: self.set_status("出错"))
+            self.after(0, lambda: messagebox.showerror(
+                "处理失败", str(e)))
+        finally:
+            self.after(0, lambda: self.start_btn.config(state="normal"))
+
+
 # ==================== 主窗口 ====================
 
 class App(tk.Tk):
@@ -351,11 +465,13 @@ class App(tk.Tk):
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        self.batch_tab = BatchTab(notebook)
         self.single_tab = SingleTab(notebook)
+        self.batch_tab = BatchTab(notebook)
+        self.class_compare_tab = ClassCompareTab(notebook)
 
-        notebook.add(self.single_tab, text="   单文件处理   ")
-        notebook.add(self.batch_tab, text="   批量处理   ")
+        notebook.add(self.single_tab, text="   小分表单文件处理   ")
+        notebook.add(self.batch_tab, text="   小分表批量处理   ")
+        notebook.add(self.class_compare_tab, text="   班级对比处理   ")
 
         # ---- 状态栏（主窗口底部，扁平） ----
         status_bar = ttk.Frame(self)

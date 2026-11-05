@@ -1,0 +1,20 @@
+{
+  "name": "历史",
+  "grade": "高三年级",
+  "title_template": "{grade}{class_num}班{exam_name}考试{subject}成绩单",
+  "sections": [
+    {
+      "prefix": "一",
+      "type": "objective",
+      "count": 16
+    },
+    {
+      "prefix": "二",
+      "type": "subjective",
+      "count": 5
+    }
+  ],
+  "default_zero_rule": "eq_zero",
+  "special_rules": {},
+  "auto_special": "last_subjective"
+}

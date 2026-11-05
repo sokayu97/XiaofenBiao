@@ -2,14 +2,13 @@
 gui.py
 小分表处理工具 —— 图形界面
 """
-
 import json
 import os
 import subprocess
 import sys
 import threading
-import traceback
 import tkinter as tk
+import traceback
 import webbrowser
 from tkinter import ttk, filedialog, messagebox
 
@@ -18,12 +17,24 @@ from config import load_configs, default_config, create_default_configs, pick_de
 from config_editor import ConfigEditor
 
 
+# ---- 兼容 PyInstaller 的资源路径获取 ----
+def get_resource_path(relative_path):
+    """获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller 打包后的运行路径
+        base_path = sys._MEIPASS
+    else:
+        # 正常 Python 运行环境的项目根目录
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
 # ---- 关于页信息（按需修改） ----
 APP_VERSION = "1.3.0"
 AUTHOR_NAME = "刘老师1"
 AUTHOR_GITHUB = "https://github.com/sokayu97/XiaofenBiao"
 DEV_ASSISTANT = "DeepSeek (深度求索)"
-REWARD_IMAGE = os.path.join("assets", "reward.png")
+REWARD_IMAGE = get_resource_path(os.path.join("assets", "reward.png"))
 
 
 # ---- 状态文件：优先放在脚本/exe 所在目录 ----
@@ -560,11 +571,14 @@ class AboutTab(ttk.Frame):
             messagebox.showerror("错误", f"无法打开：\n{path}\n\n{e}")
 
     def _show_reward(self):
-        path = os.path.abspath(REWARD_IMAGE)
+        path = REWARD_IMAGE # 这里直接用改好的全局变量
         if not os.path.isfile(path):
             messagebox.showwarning(
                 "未找到赞赏码",
-                f"未找到图片：\n{path}\n\n请将赞赏码图片保存为 assets/reward.png 后重试。")
+                f"未找到图片：\n{path}\n\n"
+                f"请确保 assets/reward.png 存在。\n"
+                f"如果您是打包用户，请确认打包时包含了 assets 文件夹。"
+            )
             return
         try:
             from PIL import Image, ImageTk
@@ -603,9 +617,6 @@ class App(tk.Tk):
         self.geometry("1000x860")
         self.minsize(900, 780)
 
-        # 使用系统原生主题（Win10/11 为 vista 扁平）
-        # 显式不设置 clam
-
         # ---- 配置加载 ----
         create_default_configs("configs")
         self.configs = load_configs("configs")
@@ -630,27 +641,35 @@ class App(tk.Tk):
                   padding=(4, 4)).pack(fill="x")
 
         # ---- 2. 选项卡 ----
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True, padx=10, pady=(6, 0))
+        # 注意这里：把 notebook 变成了 self.notebook
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(6, 0))
 
-        self.single_tab = SingleTab(notebook, self.configs, initial_key, self.config_var)
-        self.batch_tab = BatchTab(notebook, self.configs, initial_key, self.config_var)
-        self.class_compare_tab = ClassCompareTab(notebook, self.configs, initial_key, self.config_var)
-        self.about_tab = AboutTab(notebook)
+        self.single_tab = SingleTab(self.notebook, self.configs, initial_key, self.config_var)
+        self.batch_tab = BatchTab(self.notebook, self.configs, initial_key, self.config_var)
+        self.class_compare_tab = ClassCompareTab(self.notebook, self.configs, initial_key, self.config_var)
+        self.about_tab = AboutTab(self.notebook)
 
-        notebook.add(self.single_tab, text="   小分表单文件处理   ")
-        notebook.add(self.batch_tab, text="   小分表批量处理   ")
-        notebook.add(self.class_compare_tab, text="   班级对比处理   ")
-        notebook.add(self.about_tab, text="   关于   ")
+        self.notebook.add(self.single_tab, text="   小分表单文件处理   ")
+        self.notebook.add(self.batch_tab, text="   小分表批量处理   ")
+        self.notebook.add(self.class_compare_tab, text="   班级对比处理   ")
+        self.notebook.add(self.about_tab, text="   关于   ")
 
         # ---- 3. “管理配置”按钮放到 tab 头同一行右侧 ----
         self._cfg_btn = ttk.Button(self, text="⚙ 管理配置",
                                    command=self._open_config_editor)
-        self._cfg_btn.place(in_=notebook, relx=1.0, x=-6, y=4, anchor="ne")
+        # 注意这里：in_ 后面也换成了 self.notebook
+        self._cfg_btn.place(in_=self.notebook, relx=1.0, x=-6, y=4, anchor="ne")
 
         # ---- 4. 监听配置变化，同步年级 + 持久化 ----
         self.config_var.trace_add("write", self._on_config_global_changed)
         self._on_config_global_changed()   # 初始化一次
+
+        # ---- 5. 首次运行跳转到“关于”页面 ----
+        if not self._state.get("first_run_done", False):
+            self.notebook.select(self.about_tab)  # 切换到关于页
+            self._state["first_run_done"] = True  # 标记已运行过
+            save_state(self._state)
 
     # ---------- 配置变化统一处理 ----------
     def _on_config_global_changed(self, *args):

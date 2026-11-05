@@ -3,5 +3,5 @@
 /.idea/
 /.venv/
 /build/
-/dist/XiaofenBiao_Win7/
+/dist/
 /*.spec

@@ -19,12 +19,12 @@ from config_editor import ConfigEditor
 
 # ---- 兼容 PyInstaller 的资源路径获取 ----
 def get_resource_path(relative_path):
-    """获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+    """获取资源文件的绝对路径，兼容开发环境和 PyInstaller 单文件模式"""
     if hasattr(sys, '_MEIPASS'):
-        # PyInstaller 打包后的运行路径
+        # PyInstaller 单文件模式解压后的临时路径
         base_path = sys._MEIPASS
     else:
-        # 正常 Python 运行环境的项目根目录
+        # 正常 Python 运行环境
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
@@ -34,8 +34,8 @@ APP_VERSION = "1.3.0"
 AUTHOR_NAME = "刘老师1"
 AUTHOR_GITHUB = "https://github.com/sokayu97/XiaofenBiao"
 DEV_ASSISTANT = "DeepSeek (深度求索)"
+# 赞赏码的路径
 REWARD_IMAGE = get_resource_path(os.path.join("assets", "reward.png"))
-
 
 # ---- 状态文件：优先放在脚本/exe 所在目录 ----
 def _app_dir():

@@ -89,6 +89,11 @@ python -m venv .venv
 python -m pip install pandas openpyxl pillow
 ```
 
+### 0. 或者直接下载发行版
+
+请前往 [Releases](https://github.com/sokayu97/XiaofenBiao/releases) 页面，下载最新版本的 `小分表处理工具.exe` 即可直接运行（无需安装 Python）。
+或者点击[该链接](https://github.com/sokayu97/XiaofenBiao/releases/download/v1.4.0/XiaofenBiao_v1.4.0.exe)直接下载。
+
 ---
 
 ## 快速开始

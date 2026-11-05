@@ -11,6 +11,30 @@ from tkinter import ttk, filedialog, messagebox
 from config import ExamConfig, Section
 
 
+# ---- 规则中英文映射 ----
+RULE_LABELS = {
+    "eq_zero": "= 0（得 0 分）",
+    "lt_zero": "< 0（负分）",
+    "gt_zero": "> 0（正分）",
+}
+RULE_KEYS = {v: k for k, v in RULE_LABELS.items()}
+
+
+def rule_to_label(key):
+    return RULE_LABELS.get(key, key)
+
+
+def label_to_rule(label):
+    return RULE_KEYS.get(label, label)
+
+
+# ---- 题型中英文映射 ----
+TYPE_LABELS = {"objective": "客观题", "subjective": "主观题"}
+TYPE_KEYS = {v: k for k, v in TYPE_LABELS.items()}
+
+
+# ==================== 大题编辑对话框 ====================
+
 class SectionDialog(tk.Toplevel):
     def __init__(self, parent, title, section=None, on_ok=None):
         super().__init__(parent)
@@ -21,7 +45,9 @@ class SectionDialog(tk.Toplevel):
         self.on_ok = on_ok
 
         self.prefix_var = tk.StringVar(value=section.prefix if section else "")
-        self.type_var = tk.StringVar(value=section.type if section else "objective")
+        # 界面上显示中文题型
+        init_type = TYPE_LABELS.get(section.type, "客观题") if section else "客观题"
+        self.type_var = tk.StringVar(value=init_type)
         self.count_var = tk.StringVar(value=str(section.count) if section else "")
 
         frm = ttk.Frame(self, padding=12)
@@ -29,13 +55,13 @@ class SectionDialog(tk.Toplevel):
 
         ttk.Label(frm, text="题号前缀：").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(frm, textvariable=self.prefix_var, width=10).grid(row=0, column=1, pady=4)
-        ttk.Label(frm, text="（如 一、二）", foreground="gray").grid(row=0, column=2, sticky="w", padx=4)
+        ttk.Label(frm, text="（如 一、二）", foreground="gray").grid(
+            row=0, column=2, sticky="w", padx=4)
 
         ttk.Label(frm, text="题型：").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Combobox(frm, textvariable=self.type_var, state="readonly",
-                     values=["objective", "subjective"], width=12).grid(row=1, column=1, pady=4)
-        ttk.Label(frm, text="（objective=客观 / subjective=主观）",
-                  foreground="gray").grid(row=1, column=2, sticky="w", padx=4)
+                     values=list(TYPE_LABELS.values()), width=12).grid(
+            row=1, column=1, pady=4)
 
         ttk.Label(frm, text="小题数：").grid(row=2, column=0, sticky="w", pady=4)
         ttk.Entry(frm, textvariable=self.count_var, width=10).grid(row=2, column=1, pady=4)
@@ -47,7 +73,8 @@ class SectionDialog(tk.Toplevel):
 
     def _ok(self):
         p = self.prefix_var.get().strip()
-        t = self.type_var.get().strip()
+        # 界面上是中文，保存时转回英文
+        t = TYPE_KEYS.get(self.type_var.get().strip(), "objective")
         try:
             c = int(self.count_var.get().strip())
         except ValueError:
@@ -64,6 +91,8 @@ class SectionDialog(tk.Toplevel):
         self.destroy()
 
 
+# ==================== 特殊规则编辑对话框 ====================
+
 class RuleDialog(tk.Toplevel):
     def __init__(self, parent, title, q="", rule="lt_zero", on_ok=None):
         super().__init__(parent)
@@ -74,18 +103,20 @@ class RuleDialog(tk.Toplevel):
         self.on_ok = on_ok
 
         self.q_var = tk.StringVar(value=q)
-        self.rule_var = tk.StringVar(value=rule or "lt_zero")
+        self.rule_var = tk.StringVar(value=rule_to_label(rule or "lt_zero"))
 
         frm = ttk.Frame(self, padding=12)
         frm.pack(fill="both", expand=True)
 
         ttk.Label(frm, text="题号：").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Entry(frm, textvariable=self.q_var, width=12).grid(row=0, column=1, pady=4)
-        ttk.Label(frm, text="（如 二.16）", foreground="gray").grid(row=0, column=2, sticky="w", padx=4)
+        ttk.Label(frm, text="（如 二.16）", foreground="gray").grid(
+            row=0, column=2, sticky="w", padx=4)
 
         ttk.Label(frm, text="规则：").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Combobox(frm, textvariable=self.rule_var, state="readonly",
-                     values=["eq_zero", "lt_zero", "gt_zero"], width=12).grid(row=1, column=1, pady=4)
+                     values=list(RULE_LABELS.values()), width=20).grid(
+            row=1, column=1, pady=4)
 
         btn = ttk.Frame(frm)
         btn.grid(row=2, column=0, columnspan=3, pady=(10, 0), sticky="e")
@@ -94,7 +125,7 @@ class RuleDialog(tk.Toplevel):
 
     def _ok(self):
         q = self.q_var.get().strip()
-        r = self.rule_var.get().strip()
+        r = label_to_rule(self.rule_var.get().strip())
         if not q:
             messagebox.showerror("错误", "题号不能为空", parent=self)
             return
@@ -102,6 +133,8 @@ class RuleDialog(tk.Toplevel):
             self.on_ok(q, r)
         self.destroy()
 
+
+# ==================== 配置编辑器主窗口 ====================
 
 class ConfigEditor(tk.Toplevel):
     def __init__(self, parent, config_dir="configs", on_save=None):
@@ -154,13 +187,15 @@ class ConfigEditor(tk.Toplevel):
         self.name_var = tk.StringVar()
         self.grade_var = tk.StringVar()
         self.title_var = tk.StringVar()
-        self.def_rule_var = tk.StringVar(value="eq_zero")
+        self.def_rule_var = tk.StringVar(value=rule_to_label("eq_zero"))
         self.auto_special_var = tk.StringVar(value="last_subjective")
 
         ttk.Label(basic, text="试卷名称：").grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        ttk.Entry(basic, textvariable=self.name_var, width=18).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Entry(basic, textvariable=self.name_var, width=18).grid(
+            row=0, column=1, sticky="w", pady=4)
         ttk.Label(basic, text="年级：").grid(row=0, column=2, sticky="w", padx=6, pady=4)
-        ttk.Entry(basic, textvariable=self.grade_var, width=16).grid(row=0, column=3, sticky="w", pady=4)
+        ttk.Entry(basic, textvariable=self.grade_var, width=16).grid(
+            row=0, column=3, sticky="w", pady=4)
 
         ttk.Label(basic, text="标题模板：").grid(row=1, column=0, sticky="w", padx=6, pady=4)
         ttk.Entry(basic, textvariable=self.title_var).grid(
@@ -170,7 +205,7 @@ class ConfigEditor(tk.Toplevel):
 
         ttk.Label(basic, text="默认规则：").grid(row=3, column=0, sticky="w", padx=6, pady=4)
         ttk.Combobox(basic, textvariable=self.def_rule_var, state="readonly",
-                     values=["eq_zero", "lt_zero", "gt_zero"], width=14).grid(
+                     values=list(RULE_LABELS.values()), width=20).grid(
             row=3, column=1, sticky="w", pady=4)
         ttk.Label(basic, text="自动特殊：").grid(row=3, column=2, sticky="w", padx=6, pady=4)
         ttk.Combobox(basic, textvariable=self.auto_special_var, state="readonly",
@@ -200,7 +235,7 @@ class ConfigEditor(tk.Toplevel):
         self.sec_tree.bind("<Double-1>", lambda e: self._edit_section())
 
         # 特殊规则
-        rule_frame = ttk.LabelFrame(right, text="特殊规则（留空则按“自动特殊”推断）")
+        rule_frame = ttk.LabelFrame(right, text="特殊规则（如卷面分“二.16 < 0”）")
         rule_frame.pack(fill="x", pady=(0, 6))
         tb2 = ttk.Frame(rule_frame)
         tb2.pack(fill="x", padx=4, pady=4)
@@ -213,17 +248,17 @@ class ConfigEditor(tk.Toplevel):
         self.rule_tree.heading("q", text="题号")
         self.rule_tree.heading("rule", text="规则")
         self.rule_tree.column("q", width=100, anchor="center")
-        self.rule_tree.column("rule", width=120, anchor="center")
+        self.rule_tree.column("rule", width=180, anchor="center")
         self.rule_tree.pack(fill="x", padx=4, pady=(0, 4))
         self.rule_tree.bind("<Double-1>", lambda e: self._edit_rule())
 
-        # 底部
         bottom = ttk.Frame(right)
         bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="关闭", command=self.destroy).pack(side="right", padx=4)
         ttk.Button(bottom, text="另存为...", command=self._save_as).pack(side="right", padx=4)
         ttk.Button(bottom, text="保存", command=self._save).pack(side="right", padx=4)
 
+    # ---------- 文件列表 ----------
     def _refresh_file_list(self):
         self.file_list.delete(0, "end")
         self._files = []
@@ -253,32 +288,60 @@ class ConfigEditor(tk.Toplevel):
         self.name_var.set(cfg.name)
         self.grade_var.set(cfg.grade)
         self.title_var.set(cfg.title_template)
-        self.def_rule_var.set(cfg.default_zero_rule)
+        self.def_rule_var.set(rule_to_label(cfg.default_zero_rule))
         self.auto_special_var.set(cfg.auto_special or "")
         self.sections = list(cfg.sections)
         self.special_rules = dict(cfg.special_rules)
+
+        # 若配置里没有明确规则但启用"自动特殊"，则直接生成一条
+        # "最后一道主观题 = 卷面分（< 0）" 显示在特殊规则里
+        if not self.special_rules and cfg.auto_special == "last_subjective":
+            subj = cfg.subjective_columns()
+            if subj:
+                self.special_rules = {subj[-1]: "lt_zero"}
+
         self._refresh_sections()
         self._refresh_rules()
 
     def _refresh_sections(self):
         for i in self.sec_tree.get_children():
             self.sec_tree.delete(i)
-        label = {"objective": "客观题", "subjective": "主观题"}
         for s in self.sections:
-            self.sec_tree.insert("", "end",
-                                 values=(s.prefix, label.get(s.type, s.type), s.count))
+            self.sec_tree.insert(
+                "", "end",
+                values=(s.prefix, TYPE_LABELS.get(s.type, s.type), s.count))
 
     def _refresh_rules(self):
         for i in self.rule_tree.get_children():
             self.rule_tree.delete(i)
-        label = {"eq_zero": "= 0", "lt_zero": "< 0", "gt_zero": "> 0"}
         for q, r in self.special_rules.items():
-            self.rule_tree.insert("", "end", values=(q, label.get(r, r)))
+            self.rule_tree.insert("", "end", values=(q, rule_to_label(r)))
 
+    # ---------- 自动生成卷面分规则 ----------
+    def _try_auto_fill_rule(self):
+        """
+        当前没有特殊规则，且启用 last_subjective 时，
+        自动在特殊规则里生成一条"最后一道主观题 = 卷面分（< 0）"。
+        """
+        if self.special_rules:
+            return
+        if self.auto_special_var.get() != "last_subjective":
+            return
+        cfg_temp = ExamConfig(
+            sections=list(self.sections),
+            auto_special="last_subjective",
+        )
+        subj = cfg_temp.subjective_columns()
+        if subj:
+            self.special_rules = {subj[-1]: "lt_zero"}
+            self._refresh_rules()
+
+    # ---------- 大题操作 ----------
     def _add_section(self):
         def ok(sec):
             self.sections.append(sec)
             self._refresh_sections()
+            self._try_auto_fill_rule()
         SectionDialog(self, "添加大题", on_ok=ok)
 
     def _edit_section(self):
@@ -299,6 +362,7 @@ class ConfigEditor(tk.Toplevel):
         del self.sections[self.sec_tree.index(sel[0])]
         self._refresh_sections()
 
+    # ---------- 特殊规则操作 ----------
     def _add_rule(self):
         def ok(q, rule):
             self.special_rules[q] = rule
@@ -327,16 +391,21 @@ class ConfigEditor(tk.Toplevel):
         del self.special_rules[q]
         self._refresh_rules()
 
+    # ---------- 保存 ----------
     def _collect_config(self):
+        auto_special = self.auto_special_var.get() or ""
+        # 已有明确规则时，不再依赖"自动特殊"，避免重复推断
+        if self.special_rules:
+            auto_special = ""
         return ExamConfig(
             name=self.name_var.get().strip() or "未命名",
             grade=self.grade_var.get().strip() or "高三年级",
             title_template=self.title_var.get().strip()
                            or "{grade}{class_num}班{exam_name}考试{subject}成绩单",
             sections=list(self.sections),
-            default_zero_rule=self.def_rule_var.get() or "eq_zero",
+            default_zero_rule=label_to_rule(self.def_rule_var.get()) or "eq_zero",
             special_rules=dict(self.special_rules),
-            auto_special=self.auto_special_var.get() or "",
+            auto_special=auto_special,
         )
 
     def _config_to_dict(self, cfg):
@@ -364,11 +433,8 @@ class ConfigEditor(tk.Toplevel):
 
     def _save_as(self):
         fname = filedialog.asksaveasfilename(
-            title="另存为",
-            initialdir=self.config_dir,
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json")],
-        )
+            title="另存为", initialdir=self.config_dir,
+            defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not fname:
             return
         self.current_file = os.path.basename(fname)
@@ -385,7 +451,7 @@ class ConfigEditor(tk.Toplevel):
         self.name_var.set("新配置")
         self.grade_var.set("高三年级")
         self.title_var.set("{grade}{class_num}班{exam_name}考试{subject}成绩单")
-        self.def_rule_var.set("eq_zero")
+        self.def_rule_var.set(rule_to_label("eq_zero"))
         self.auto_special_var.set("last_subjective")
         self.sections = []
         self.special_rules = {}

@@ -3,8 +3,10 @@ gui.py
 小分表处理工具 —— 图形界面
 """
 
+import json
 import os
 import subprocess
+import sys
 import threading
 import traceback
 import tkinter as tk
@@ -12,7 +14,7 @@ import webbrowser
 from tkinter import ttk, filedialog, messagebox
 
 import processor
-from config import load_configs, default_config, create_default_configs
+from config import load_configs, default_config, create_default_configs, pick_default_key
 from config_editor import ConfigEditor
 
 
@@ -24,20 +26,43 @@ DEV_ASSISTANT = "DeepSeek (深度求索)"
 REWARD_IMAGE = os.path.join("assets", "reward.png")
 
 
+# ---- 状态文件：优先放在脚本/exe 所在目录 ----
+def _app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+STATE_FILE = os.path.join(_app_dir(), "app_state.json")
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 # ==================== 公共基类 ====================
 
 class BaseTab(ttk.Frame):
-    def __init__(self, parent, configs, default_key):
+    def __init__(self, parent, configs, default_key, config_var):
         super().__init__(parent)
         self._configs = dict(configs)
         self._default_key = default_key
-
+        self.config_var = config_var          # 由 App 共享
+        self.grade_var = tk.StringVar()
         self.exam_var = tk.StringVar()
         self.class_var = tk.StringVar()
-        self.grade_var = tk.StringVar()
-        self.config_var = tk.StringVar()
 
-    # ---------- 状态栏 ----------
     def set_status(self, msg):
         top = self.winfo_toplevel()
         if hasattr(top, "status_var"):
@@ -55,31 +80,14 @@ class BaseTab(ttk.Frame):
         ttk.Label(frame, text="年级：").pack(side="left", padx=(16, 4), pady=6)
         ttk.Entry(frame, textvariable=self.grade_var, width=14).pack(side="left", pady=6)
 
-        self.config_combo.bind("<<ComboboxSelected>>", self._on_config_changed)
-
-        if self._default_key in self._configs:
+        if not self.config_var.get() and self._default_key in self._configs:
             self.config_var.set(self._default_key)
-        elif self._configs:
-            self.config_var.set(next(iter(self._configs)))
-        self._on_config_changed()
-
         return frame
-
-    def _on_config_changed(self, event=None):
-        cfg = self.get_config()
-        if cfg:
-            self.grade_var.set(cfg.grade)
 
     def refresh_configs(self, configs):
         self._configs = dict(configs)
-        if not hasattr(self, "config_combo"):
-            return
-        current = self.config_var.get()
-        self.config_combo["values"] = list(configs.keys())
-        if current not in configs:
-            if configs:
-                self.config_var.set(next(iter(configs)))
-                self._on_config_changed()
+        if hasattr(self, "config_combo"):
+            self.config_combo["values"] = list(configs.keys())
 
     def get_config(self):
         key = self.config_var.get()
@@ -132,15 +140,19 @@ class BaseTab(ttk.Frame):
             return None
         return cls
 
-    # ---------- 打开目录 / 文件 ----------
     @staticmethod
     def _open_in_explorer(file_path):
         try:
-            norm = os.path.normpath(file_path)
-            subprocess.Popen(["explorer", f"/select,{norm}"])
+            norm = os.path.normpath(os.path.abspath(file_path))
+            if not os.path.exists(norm):
+                folder = os.path.dirname(norm)
+                if os.path.isdir(folder):
+                    os.startfile(folder)
+                return
+            subprocess.Popen(f'explorer /select,"{norm}"')
         except Exception:
             try:
-                os.startfile(os.path.dirname(file_path))
+                os.startfile(os.path.dirname(norm))
             except Exception:
                 pass
 
@@ -148,8 +160,8 @@ class BaseTab(ttk.Frame):
 # ==================== 选项卡 1：小分表单文件处理 ====================
 
 class SingleTab(BaseTab):
-    def __init__(self, parent, configs, default_key):
-        super().__init__(parent, configs, default_key)
+    def __init__(self, parent, configs, default_key, config_var):
+        super().__init__(parent, configs, default_key, config_var)
         self.input_var = tk.StringVar()
         self.auto_open_var = tk.BooleanVar(value=True)
         self.start_btn = None
@@ -201,19 +213,16 @@ class SingleTab(BaseTab):
         if not input_file or not os.path.isfile(input_file):
             messagebox.showerror("错误", f"输入文件不存在：\n{input_file}")
             return
-
         cls = self.get_class()
         if cls is None:
             return
 
         in_dir = os.path.dirname(input_file) or os.getcwd()
         name, _ = os.path.splitext(os.path.basename(input_file))
-        default_name = f"{name}_处理后.xlsx"
-
         output_file = filedialog.asksaveasfilename(
             title="选择保存位置",
             initialdir=in_dir,
-            initialfile=default_name,
+            initialfile=f"{name}_处理后.xlsx",
             defaultextension=".xlsx",
             filetypes=[("Excel 文件", "*.xlsx")],
         )
@@ -227,19 +236,16 @@ class SingleTab(BaseTab):
         self.start_btn.config(state="disabled")
         self.set_status("处理中...")
 
-        t = threading.Thread(
+        threading.Thread(
             target=self._run,
             args=(input_file, output_file, exam_name, cls),
             daemon=True,
-        )
-        t.start()
+        ).start()
 
     def _run(self, input_file, output_file, exam_name, cls):
         try:
-            exam_name_arg = exam_name
             grade = self.grade_var.get().strip()
             cfg = self.get_config()
-
             self.log(f"输入：{input_file}")
             self.log(f"输出：{output_file}")
             if cfg:
@@ -249,11 +255,8 @@ class SingleTab(BaseTab):
 
             processor.process_one(
                 input_file, output_file,
-                log=self.log,
-                exam_name=exam_name_arg,
-                class_num=cls,
-                grade=grade,
-                cfg=cfg,
+                log=self.log, exam_name=exam_name, class_num=cls,
+                grade=grade, cfg=cfg,
             )
             self.log("\n✅ 处理完成。")
             self.after(0, lambda: self.set_status("完成"))
@@ -275,8 +278,8 @@ class SingleTab(BaseTab):
 # ==================== 选项卡 2：小分表批量处理 ====================
 
 class BatchTab(BaseTab):
-    def __init__(self, parent, configs, default_key):
-        super().__init__(parent, configs, default_key)
+    def __init__(self, parent, configs, default_key, config_var):
+        super().__init__(parent, configs, default_key, config_var)
         self.input_var = tk.StringVar(value=os.path.abspath("resources"))
         self.output_var = tk.StringVar(value=os.path.abspath("production"))
         self.auto_open_var = tk.BooleanVar(value=True)
@@ -291,19 +294,12 @@ class BatchTab(BaseTab):
 
         top = ttk.LabelFrame(self, text="文件夹设置")
         top.pack(fill="x", **pad)
-        ttk.Label(top, text="输入文件夹：").grid(row=0, column=0,
-                                                sticky="w", padx=8, pady=6)
-        ttk.Entry(top, textvariable=self.input_var).grid(row=0, column=1,
-                                                         sticky="ew", padx=4)
-        ttk.Button(top, text="选择...",
-                   command=self.choose_input).grid(row=0, column=2, padx=6)
-
-        ttk.Label(top, text="输出文件夹：").grid(row=1, column=0,
-                                                sticky="w", padx=8, pady=6)
-        ttk.Entry(top, textvariable=self.output_var).grid(row=1, column=1,
-                                                          sticky="ew", padx=4)
-        ttk.Button(top, text="选择...",
-                   command=self.choose_output).grid(row=1, column=2, padx=6)
+        ttk.Label(top, text="输入文件夹：").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(top, textvariable=self.input_var).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(top, text="选择...", command=self.choose_input).grid(row=0, column=2, padx=6)
+        ttk.Label(top, text="输出文件夹：").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(top, textvariable=self.output_var).grid(row=1, column=1, sticky="ew", padx=4)
+        ttk.Button(top, text="选择...", command=self.choose_output).grid(row=1, column=2, padx=6)
         top.columnconfigure(1, weight=1)
 
         info = self._build_exam_info(self)
@@ -313,8 +309,7 @@ class BatchTab(BaseTab):
         mid.pack(fill="x", **pad)
         ttk.Checkbutton(mid, text="处理完成后自动打开输出文件夹",
                         variable=self.auto_open_var).pack(side="left", padx=6)
-        self.start_btn = ttk.Button(mid, text="开始批量处理",
-                                    command=self.on_start)
+        self.start_btn = ttk.Button(mid, text="开始批量处理", command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
 
         log_frame = self._build_log(self)
@@ -341,7 +336,6 @@ class BatchTab(BaseTab):
         if not out_dir:
             messagebox.showerror("错误", "请填写输出文件夹")
             return
-
         cls = self.get_class()
         if cls is None:
             return
@@ -349,17 +343,14 @@ class BatchTab(BaseTab):
         self.clear_log()
         self.start_btn.config(state="disabled")
         self.set_status("批量处理中...")
-
-        t = threading.Thread(target=self._run,
-                             args=(in_dir, out_dir, cls), daemon=True)
-        t.start()
+        threading.Thread(target=self._run, args=(in_dir, out_dir, cls),
+                         daemon=True).start()
 
     def _run(self, in_dir, out_dir, cls):
         try:
             exam_name = self.exam_var.get().strip()
             grade = self.grade_var.get().strip()
             cfg = self.get_config()
-
             self.log(f"输入：{in_dir}")
             self.log(f"输出：{out_dir}")
             if cfg:
@@ -368,22 +359,15 @@ class BatchTab(BaseTab):
                 self.log(f"考试名称：{exam_name or '（空）'}，班级：{cls or '（空）'}")
 
             ok, fail = processor.batch_process(
-                in_dir, out_dir,
-                log=self.log,
-                exam_name=exam_name,
-                class_num=cls,
-                grade=grade,
-                cfg=cfg,
+                in_dir, out_dir, log=self.log,
+                exam_name=exam_name, class_num=cls, grade=grade, cfg=cfg,
             )
-
             if self.auto_open_var.get() and os.path.isdir(out_dir):
                 try:
                     os.startfile(os.path.abspath(out_dir))
                 except Exception:
                     pass
-
-            self.after(0, lambda: self.set_status(
-                f"完成：成功 {ok}，失败 {fail}"))
+            self.after(0, lambda: self.set_status(f"完成：成功 {ok}，失败 {fail}"))
         except Exception as e:
             self.log(f"发生异常：{e}")
             self.log(traceback.format_exc())
@@ -395,8 +379,8 @@ class BatchTab(BaseTab):
 # ==================== 选项卡 3：班级对比处理 ====================
 
 class ClassCompareTab(BaseTab):
-    def __init__(self, parent, configs, default_key):
-        super().__init__(parent, configs, default_key)
+    def __init__(self, parent, configs, default_key, config_var):
+        super().__init__(parent, configs, default_key, config_var)
         self.input_var = tk.StringVar()
         self.auto_open_var = tk.BooleanVar(value=True)
         self.start_btn = None
@@ -410,20 +394,16 @@ class ClassCompareTab(BaseTab):
 
         top = ttk.LabelFrame(self, text="文件选择")
         top.pack(fill="x", **pad)
-        ttk.Label(top, text="输入文件：").grid(row=0, column=0,
-                                              sticky="w", padx=8, pady=6)
-        ttk.Entry(top, textvariable=self.input_var).grid(row=0, column=1,
-                                                         sticky="ew", padx=4)
-        ttk.Button(top, text="选择文件...",
-                   command=self.choose_file).grid(row=0, column=2, padx=6)
+        ttk.Label(top, text="输入文件：").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(top, textvariable=self.input_var).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(top, text="选择文件...", command=self.choose_file).grid(row=0, column=2, padx=6)
         top.columnconfigure(1, weight=1)
 
         mid = ttk.Frame(self)
         mid.pack(fill="x", **pad)
         ttk.Checkbutton(mid, text="处理完成后自动打开保存位置",
                         variable=self.auto_open_var).pack(side="left", padx=6)
-        self.start_btn = ttk.Button(mid, text="开始处理并保存...",
-                                    command=self.on_start)
+        self.start_btn = ttk.Button(mid, text="开始处理并保存...", command=self.on_start)
         self.start_btn.pack(side="right", padx=6)
 
         log_frame = self._build_log(self)
@@ -433,8 +413,7 @@ class ClassCompareTab(BaseTab):
         init = self.input_var.get()
         init_dir = os.path.dirname(init) if init else os.getcwd()
         f = filedialog.askopenfilename(
-            title="选择班级对比表",
-            initialdir=init_dir,
+            title="选择班级对比表", initialdir=init_dir,
             filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
         )
         if f:
@@ -445,16 +424,11 @@ class ClassCompareTab(BaseTab):
         if not input_file or not os.path.isfile(input_file):
             messagebox.showerror("错误", f"输入文件不存在：\n{input_file}")
             return
-
         in_dir = os.path.dirname(input_file) or os.getcwd()
         name, _ = os.path.splitext(os.path.basename(input_file))
-        default_name = f"{name}_处理后.xlsx"
-
         output_file = filedialog.asksaveasfilename(
-            title="选择保存位置",
-            initialdir=in_dir,
-            initialfile=default_name,
-            defaultextension=".xlsx",
+            title="选择保存位置", initialdir=in_dir,
+            initialfile=f"{name}_处理后.xlsx", defaultextension=".xlsx",
             filetypes=[("Excel 文件", "*.xlsx")],
         )
         if not output_file:
@@ -465,10 +439,8 @@ class ClassCompareTab(BaseTab):
         self.clear_log()
         self.start_btn.config(state="disabled")
         self.set_status("处理中...")
-
-        t = threading.Thread(target=self._run,
-                             args=(input_file, output_file), daemon=True)
-        t.start()
+        threading.Thread(target=self._run, args=(input_file, output_file),
+                         daemon=True).start()
 
     def _run(self, input_file, output_file):
         try:
@@ -508,19 +480,16 @@ class AboutTab(ttk.Frame):
     def _build_ui(self):
         wrapper = ttk.Frame(self)
         wrapper.pack(expand=True, fill="both", padx=40, pady=16)
-
         center = ttk.Frame(wrapper)
         center.pack(expand=True)
 
         ttk.Label(center, text="小分表处理工具",
                   font=("Microsoft YaHei", 22, "bold")).pack(pady=(0, 4))
         ttk.Label(center, text=f"版本 {APP_VERSION}",
-                  font=("Microsoft YaHei", 10),
-                  foreground="gray").pack(pady=(0, 14))
+                  font=("Microsoft YaHei", 10), foreground="gray").pack(pady=(0, 14))
         ttk.Label(center, text="面向中学成绩单的自动化处理工具",
                   font=("Microsoft YaHei", 11)).pack(pady=(0, 18))
 
-        # 功能
         feat = ttk.LabelFrame(center, text="功能")
         feat.pack(fill="x", pady=(0, 12))
         features = [
@@ -536,27 +505,23 @@ class AboutTab(ttk.Frame):
                       font=("Microsoft YaHei", 10, "bold")).pack(side="left")
             ttk.Label(row, text=desc, foreground="#444").pack(side="left", padx=6)
 
-        # 提示
         tips = ttk.LabelFrame(center, text="使用提示")
         tips.pack(fill="x", pady=(0, 12))
-        tip_lines = [
+        for line in [
             "• 试卷结构、卷面分题号、标题模板均可在「⚙ 管理配置」中调整",
             "• 年级、考试名称、班级可在各选项卡中临时覆盖配置",
             "• 处理结果默认输出到 production 目录，可勾选自动打开保存位置",
             "• 支持 .xlsx 文件；批量模式会跳过以 ~$ 开头的临时文件",
-        ]
-        for line in tip_lines:
+        ]:
             ttk.Label(tips, text=line, foreground="#555").pack(anchor="w", padx=12, pady=2)
 
-        # 作者
         author = ttk.LabelFrame(center, text="关于作者")
         author.pack(fill="x", pady=(0, 12))
         ttk.Label(author, text=f"作者：{AUTHOR_NAME}",
                   font=("Microsoft YaHei", 10, "bold")).pack(pady=(8, 2))
 
-        gh = ttk.Label(author, text=AUTHOR_GITHUB,
-                       foreground="#0a66c2", cursor="hand2",
-                       font=("Consolas", 10))
+        gh = ttk.Label(author, text=AUTHOR_GITHUB, foreground="#0a66c2",
+                       cursor="hand2", font=("Consolas", 10))
         gh.pack(pady=2)
         gh.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_GITHUB))
         gh.bind("<Enter>", lambda e: gh.configure(foreground="#1a7fd4"))
@@ -565,7 +530,6 @@ class AboutTab(ttk.Frame):
         ttk.Label(author, text=f"开发助手：{DEV_ASSISTANT}",
                   foreground="gray").pack(pady=(2, 8))
 
-        # 快捷按钮
         btns = ttk.Frame(center)
         btns.pack(fill="x", pady=(0, 12))
         row1 = ttk.Frame(btns)
@@ -576,15 +540,11 @@ class AboutTab(ttk.Frame):
                    command=lambda: self._open_dir("production")).pack(side="left", padx=4)
         ttk.Button(row1, text="打开 configs",
                    command=lambda: self._open_dir("configs")).pack(side="left", padx=4)
-
         ttk.Button(btns, text="💝 赞赏支持",
                    command=self._show_reward).pack(pady=(8, 0))
 
-        # 底部
-        ttk.Label(center,
-                  text="基于 Python · pandas · openpyxl · tkinter",
-                  font=("Consolas", 9),
-                  foreground="gray").pack(pady=(6, 0))
+        ttk.Label(center, text="基于 Python · pandas · openpyxl · tkinter",
+                  font=("Consolas", 9), foreground="gray").pack(pady=(6, 0))
 
     def _open_dir(self, name):
         path = os.path.abspath(name)
@@ -604,11 +564,8 @@ class AboutTab(ttk.Frame):
         if not os.path.isfile(path):
             messagebox.showwarning(
                 "未找到赞赏码",
-                f"未找到图片：\n{path}\n\n"
-                f"请将赞赏码图片保存为 assets/reward.png 后重试。"
-            )
+                f"未找到图片：\n{path}\n\n请将赞赏码图片保存为 assets/reward.png 后重试。")
             return
-
         try:
             from PIL import Image, ImageTk
             img = Image.open(path)
@@ -618,12 +575,10 @@ class AboutTab(ttk.Frame):
             top.resizable(False, False)
             top.transient(self.winfo_toplevel())
             top.grab_set()
-
             photo = ImageTk.PhotoImage(img)
             lbl = ttk.Label(top, image=photo)
             lbl.image = photo
             lbl.pack(padx=20, pady=(20, 8))
-
             ttk.Label(top, text="感谢你的支持！",
                       font=("Microsoft YaHei", 11)).pack(pady=(0, 8))
             ttk.Button(top, text="关闭", command=top.destroy).pack(pady=(0, 16))
@@ -633,7 +588,6 @@ class AboutTab(ttk.Frame):
         except Exception as e:
             messagebox.showerror("错误", f"无法显示赞赏码：\n{e}")
             return
-
         try:
             os.startfile(path)
         except Exception as e:
@@ -649,45 +603,39 @@ class App(tk.Tk):
         self.geometry("1000x860")
         self.minsize(900, 780)
 
-        # 使用系统原生主题（Windows 10/11 上为 vista，扁平风格）
-        # 不再调用 style.theme_use("clam")，避免出现 Win98 立体外观
+        # 使用系统原生主题（Win10/11 为 vista 扁平）
+        # 显式不设置 clam
 
-        # 配置
-        self.configs = load_configs("configs")
-        if not self.configs:
-            self.configs = {"默认（物理）": default_config()}
-        self.default_config_key = next(iter(self.configs))
-
-        # 首次启动时自动生成九科默认配置
+        # ---- 配置加载 ----
         create_default_configs("configs")
         self.configs = load_configs("configs")
         if not self.configs:
             self.configs = {"默认（物理）": default_config()}
-        self.default_config_key = next(iter(self.configs))
 
-        # ---- 1. 状态栏（先 pack，保证不被挤压） ----
+        # 状态：优先用上次选中的配置，否则物理
+        self._state = load_state()
+        saved_key = self._state.get("selected_config")
+        initial_key = saved_key if saved_key in self.configs else pick_default_key(self.configs)
+
+        # 三个选项卡共享同一个配置变量
+        self.config_var = tk.StringVar(value=initial_key)
+
+        # ---- 1. 状态栏先 pack（保证不被挤压） ----
         status_bar = ttk.Frame(self)
         status_bar.pack(fill="x", side="bottom", padx=10, pady=(4, 6))
         ttk.Separator(status_bar, orient="horizontal").pack(fill="x")
-
         self.status_var = tk.StringVar(value="就绪")
-        ttk.Label(status_bar, textvariable=self.status_var,
-                  anchor="w", relief="flat", borderwidth=0,
+        ttk.Label(status_bar, textvariable=self.status_var, anchor="w",
+                  relief="flat", borderwidth=0,
                   padding=(4, 4)).pack(fill="x")
 
-        # ---- 2. 工具栏 ----
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", side="top", padx=10, pady=(8, 0))
-        ttk.Button(toolbar, text="⚙ 管理配置",
-                   command=self._open_config_editor).pack(side="right")
-
-        # ---- 3. 选项卡 ----
+        # ---- 2. 选项卡 ----
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=10, pady=(6, 0))
 
-        self.single_tab = SingleTab(notebook, self.configs, self.default_config_key)
-        self.batch_tab = BatchTab(notebook, self.configs, self.default_config_key)
-        self.class_compare_tab = ClassCompareTab(notebook, self.configs, self.default_config_key)
+        self.single_tab = SingleTab(notebook, self.configs, initial_key, self.config_var)
+        self.batch_tab = BatchTab(notebook, self.configs, initial_key, self.config_var)
+        self.class_compare_tab = ClassCompareTab(notebook, self.configs, initial_key, self.config_var)
         self.about_tab = AboutTab(notebook)
 
         notebook.add(self.single_tab, text="   小分表单文件处理   ")
@@ -695,6 +643,25 @@ class App(tk.Tk):
         notebook.add(self.class_compare_tab, text="   班级对比处理   ")
         notebook.add(self.about_tab, text="   关于   ")
 
+        # ---- 3. “管理配置”按钮放到 tab 头同一行右侧 ----
+        self._cfg_btn = ttk.Button(self, text="⚙ 管理配置",
+                                   command=self._open_config_editor)
+        self._cfg_btn.place(in_=notebook, relx=1.0, x=-6, y=4, anchor="ne")
+
+        # ---- 4. 监听配置变化，同步年级 + 持久化 ----
+        self.config_var.trace_add("write", self._on_config_global_changed)
+        self._on_config_global_changed()   # 初始化一次
+
+    # ---------- 配置变化统一处理 ----------
+    def _on_config_global_changed(self, *args):
+        key = self.config_var.get()
+        cfg = self.configs.get(key)
+        if cfg:
+            for tab in (self.single_tab, self.batch_tab, self.class_compare_tab):
+                tab.grade_var.set(cfg.grade)
+            save_state({"selected_config": key})
+
+    # ---------- 打开配置编辑器 ----------
     def _open_config_editor(self):
         ConfigEditor(self, config_dir="configs", on_save=self._reload_configs)
 
@@ -702,11 +669,15 @@ class App(tk.Tk):
         new = load_configs("configs")
         if not new:
             return
-        if self.default_config_key not in new:
-            self.default_config_key = next(iter(new))
         self.configs = new
         for tab in (self.single_tab, self.batch_tab, self.class_compare_tab):
             tab.refresh_configs(new)
+        current = self.config_var.get()
+        if current not in new:
+            self.config_var.set(pick_default_key(new))
+        else:
+            # 值未变，但内容可能变了，手动触发一次同步
+            self._on_config_global_changed()
 
 
 def main():
